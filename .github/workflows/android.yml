@@ -1,0 +1,127 @@
+name: android
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, cursor/mallowskip-mobile-0492]
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot 4.6.2
+        run: bash ci/install-godot.sh
+      - name: Capture phone-viewport screenshots
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-utils libgl1 libglu1-mesa
+          mkdir -p build/screenshots
+          # The shipped game uses the Mobile renderer. xvfb has no Vulkan, so capture with Compatibility.
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            env MALLOW_SCREENSHOT=1 MALLOW_SHOT_DIR="$PWD/build/screenshots" LIBGL_ALWAYS_SOFTWARE=1 \
+            godot --path . --rendering-driver opengl3 --rendering-method gl_compatibility res://scenes/menu.tscn
+          ls -la build/screenshots
+          test -s build/screenshots/menu.png
+          test -s build/screenshots/gameplay.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phone-screenshots
+          path: build/screenshots/*.png
+
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK 36
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip wget
+          ANDROID_HOME="$HOME/Android/Sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+          rm -rf /tmp/cmdline-tools
+          unzip -q /tmp/cmdtools.zip -d /tmp
+          rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+          mv /tmp/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;28.1.13356709" "platform-tools"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Install Godot 4.6.2
+        run: bash ci/install-godot.sh
+
+      - name: Patch Android templates for API 36
+        run: bash ci/patch-android-templates.sh
+
+      - name: Editor SDK paths
+        run: |
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.6.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+      - name: Keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          mkdir -p "$HOME/keystores"
+          if [ -n "$ANDROID_KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$HOME/keystores/release.jks"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$HOME/keystores/release.jks" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGNING=release" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -v -keystore "$HOME/keystores/debug.keystore" -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Mallowskip Debug, OU=Debug, O=Debug, L=Debug, S=Debug, C=US"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$HOME/keystores/debug.keystore" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=androiddebugkey" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/keystores/debug.keystore" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "SIGNING=debug" >> "$GITHUB_ENV"
+            echo "::notice::ANDROID_KEYSTORE_* secrets are absent. The APK and AAB are debug-signed."
+          fi
+
+      - name: Stamp version code
+        run: |
+          sed -i "s|^version/code=1|version/code=${{ github.run_number }}|" export_presets.cfg
+          grep -n 'version/code=' export_presets.cfg
+
+      - name: Export APK and AAB
+        run: |
+          mkdir -p build/android
+          godot --headless --path . --export-release "Android APK" "$PWD/build/android/Mallowskip.apk"
+          godot --headless --path . --export-release "Android AAB" "$PWD/build/android/Mallowskip.aab"
+          ls -la build/android
+          test -s build/android/Mallowskip.apk
+          test -s build/android/Mallowskip.aab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mallowskip-android-${{ env.SIGNING }}
+          path: |
+            build/android/Mallowskip.apk
+            build/android/Mallowskip.aab

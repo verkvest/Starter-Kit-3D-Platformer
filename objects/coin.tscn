@@ -91,7 +91,7 @@ color_ramp = SubResource("GradientTexture1D_1o7s2")
 
 [sub_resource type="QuadMesh" id="QuadMesh_744xy"]
 
-[node name="coin" type="Area3D"]
+[node name="coin" type="Area3D" groups=["coin"]]
 script = ExtResource("2_gaakh")
 
 [node name="Mesh" type="MeshInstance3D" parent="."]
