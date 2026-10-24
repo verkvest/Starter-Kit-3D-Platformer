@@ -27,7 +27,9 @@ else
   install -m 755 "/tmp/godot-editor/Godot_v${VERSION}-stable_linux.x86_64" "${BIN_DIR}/godot"
 fi
 
-if [[ ! -f "${TEMPLATE_ROOT}/version.txt" ]]; then
+if [[ "${SKIP_TEMPLATES:-}" == "1" ]]; then
+  echo "skipping export templates"
+elif [[ ! -f "${TEMPLATE_ROOT}/version.txt" ]]; then
   mkdir -p "${TEMPLATE_ROOT}" /tmp/godot-templates
   curl -fsSL -o /tmp/godot-templates.tpz \
     "https://github.com/godotengine/godot/releases/download/${VERSION}-stable/Godot_v${VERSION}-stable_export_templates.tpz"

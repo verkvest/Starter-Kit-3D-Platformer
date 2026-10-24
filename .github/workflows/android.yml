@@ -12,16 +12,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Godot 4.6.2
-        run: bash ci/install-godot.sh
+        run: SKIP_TEMPLATES=1 bash ci/install-godot.sh
       - name: Capture phone-viewport screenshots
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb mesa-utils libgl1 libglu1-mesa
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb mesa-utils libgl1 libglu1-mesa
           mkdir -p build/screenshots
+          # Import before play. Launching the game during import never reaches the screenshot quit.
+          # Skip ETC2/ASTC here so the 4096 skybox does not stall a CPU runner. The shipped project stays compressed.
+          sed -i 's/import_etc2_astc=true/import_etc2_astc=false/' project.godot
+          timeout 600 godot --headless --path . --import --quit
           # The shipped game uses the Mobile renderer. xvfb has no Vulkan, so capture with Compatibility.
-          xvfb-run -a -s "-screen 0 1280x800x24" \
+          timeout 180 xvfb-run -a -s "-screen 0 1280x800x24" \
             env MALLOW_SCREENSHOT=1 MALLOW_SHOT_DIR="$PWD/build/screenshots" LIBGL_ALWAYS_SOFTWARE=1 \
-            godot --path . --rendering-driver opengl3 --rendering-method gl_compatibility res://scenes/menu.tscn
+            godot --path . --rendering-driver opengl3 --rendering-method gl_compatibility --quit-after 400 res://scenes/menu.tscn
           ls -la build/screenshots
           test -s build/screenshots/menu.png
           test -s build/screenshots/gameplay.png
