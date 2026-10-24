@@ -1,6 +1,7 @@
 extends CharacterBody3D
 
 signal coin_collected
+signal fell
 
 @export_subgroup("Components")
 @export var view: Node3D
@@ -19,6 +20,7 @@ var jump_single = true
 var jump_double = true
 
 var coins = 0
+var _fallen := false
 
 @onready var particles_trail = $ParticlesTrail
 @onready var sound_footsteps = $SoundFootsteps
@@ -55,8 +57,11 @@ func _physics_process(delta):
 
 	# Falling/respawning
 
-	if position.y < -10:
-		get_tree().reload_current_scene()
+	if position.y < -10 and not _fallen:
+		_fallen = true
+		fell.emit()
+		if get_tree().get_first_node_in_group("play_root") == null:
+			get_tree().reload_current_scene()
 
 	# Animation for scale (jumping and landing)
 

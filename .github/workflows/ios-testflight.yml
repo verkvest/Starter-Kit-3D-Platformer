@@ -1,0 +1,130 @@
+name: ios-testflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, cursor/mallowskip-mobile-0492]
+    tags: ["testflight-*"]
+
+env:
+  TEAM_ID: 38PT254HDZ
+  BUNDLE_ID: es.verkvest.mallowskip
+  APP_VERSION: "1.0.0"
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      HAS_KEY: ${{ secrets.APPSTORE_API_KEY_P8 != '' && secrets.APPSTORE_API_KEY_ID != '' && secrets.APPSTORE_API_ISSUER_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools + Xcode 26
+        run: |
+          brew install ninja || true
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          [ -n "$X" ] && sudo xcode-select -s "$X"
+          xcodebuild -version
+          python3 -m pip install --user --break-system-packages pyjwt cryptography || python3 -m pip install --user pyjwt cryptography
+
+      - name: Install Godot 4.6.2
+        run: bash ci/install-godot.sh
+
+      - name: Stamp build number
+        run: |
+          sed -i '' "s|^application/version=\"1\"|application/version=\"${{ github.run_number }}\"|" export_presets.cfg
+          grep -n 'application/version=' export_presets.cfg
+
+      - name: Export Xcode project
+        run: |
+          mkdir -p build/ios
+          godot --headless --path . --export-release "iOS" "$PWD/build/ios/Mallowskip"
+          test -d build/ios/Mallowskip.xcodeproj
+          test -d build/ios/Mallowskip/dylibs
+
+      - name: Archive unsigned
+        run: |
+          xcodebuild -project build/ios/Mallowskip.xcodeproj -scheme Mallowskip -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Mallowskip.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            SKIP_INSTALL=NO INSTALL_PATH=/Applications \
+            archive | tee "$RUNNER_TEMP/archive.log" | tail -80
+          test ${PIPESTATUS[0]} -eq 0
+          find "$RUNNER_TEMP/Mallowskip.xcarchive" -maxdepth 3 | head -30
+          /usr/libexec/PlistBuddy -c Print "$RUNNER_TEMP/Mallowskip.xcarchive/Info.plist"
+
+      - name: Install API key
+        if: env.HAS_KEY == 'true'
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          KEYFILE=~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8
+          if printf '%s' "$APPSTORE_API_KEY_P8" | grep -q "BEGIN PRIVATE KEY"; then
+            printf '%s\n' "$APPSTORE_API_KEY_P8" > "$KEYFILE"
+          else
+            printf '%s' "$APPSTORE_API_KEY_P8" | base64 --decode > "$KEYFILE"
+          fi
+          chmod 600 "$KEYFILE"
+          echo "KEYFILE=$KEYFILE" >> "$GITHUB_ENV"
+
+      - name: Register bundle id
+        if: env.HAS_KEY == 'true'
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_KEY_PATH: ${{ env.KEYFILE }}
+        run: python3 ci/register-bundle-id.py
+
+      - name: Export with App Store distribution signing and upload to TestFlight
+        if: env.HAS_KEY == 'true'
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Mallowskip.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates -authenticationKeyPath "$KEYFILE" \
+            -authenticationKeyID "$APPSTORE_API_KEY_ID" -authenticationKeyIssuerID "$APPSTORE_API_ISSUER_ID"
+          ls -la "$RUNNER_TEMP/export"
+          xcrun altool --upload-app -t ios -f "$RUNNER_TEMP"/export/*.ipa \
+            --apiKey "$APPSTORE_API_KEY_ID" --apiIssuer "$APPSTORE_API_ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/upload.log"
+          if grep -q "ERROR" "$RUNNER_TEMP/upload.log"; then
+            if grep -q "Cannot determine the Apple ID" "$RUNNER_TEMP/upload.log"; then
+              echo "::error::No App Store Connect app record for ${BUNDLE_ID} yet. Create it in App Store Connect → Apps → New App (bundle id ${BUNDLE_ID}, SKU mallowskip), then re-run this workflow. The API cannot create that record."
+            fi
+            exit 1
+          fi
+          echo "::notice::Uploaded ${BUNDLE_ID} ${APP_VERSION} (${{ github.run_number }}) to App Store Connect"
+
+      - name: No API key
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::App Store Connect API key secrets are not set. Unsigned archive succeeded; signing and TestFlight upload were skipped."
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: testflight-logs
+          path: |
+            ${{ runner.temp }}/archive.log
+            ${{ runner.temp }}/upload.log
+          if-no-files-found: ignore
+
+      - name: Cleanup key
+        if: always()
+        run: rm -rf ~/.appstoreconnect/private_keys
