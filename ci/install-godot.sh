@@ -40,8 +40,10 @@ elif [[ ! -f "${TEMPLATE_ROOT}/version.txt" ]]; then
 fi
 
 test -x "${BIN_DIR}/godot"
-test -f "${TEMPLATE_ROOT}/version.txt"
-echo "Godot $(${BIN_DIR}/godot --version) templates ${TEMPLATE_ROOT}"
+if [[ "${SKIP_TEMPLATES:-}" != "1" ]]; then
+  test -f "${TEMPLATE_ROOT}/version.txt"
+fi
+echo "Godot $(${BIN_DIR}/godot --version)"
 if [[ -n "${GITHUB_PATH:-}" ]]; then
   echo "${BIN_DIR}" >> "${GITHUB_PATH}"
 fi
