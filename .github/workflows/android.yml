@@ -65,6 +65,9 @@ jobs:
       - name: Patch Android templates for API 36
         run: bash ci/patch-android-templates.sh
 
+      - name: Install Android build template
+        run: bash ci/install-android-template.sh
+
       - name: Editor SDK paths
         run: |
           mkdir -p "$HOME/.config/godot"

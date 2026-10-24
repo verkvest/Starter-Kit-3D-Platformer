@@ -15,3 +15,6 @@ mono_crash.*.json
 
 # Kenney ignores
 build/
+
+# Installed in CI from the Godot Android export template
+/android/

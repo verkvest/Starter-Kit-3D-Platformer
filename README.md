@@ -36,7 +36,7 @@ The app icon and boot splash are original. They are not Kenney's character.
 
 ### Export
 
-Godot 4.6.2. iOS exports an Xcode project only (`application/export_project_only`) so signing happens in CI. Android uses the Gradle build with `minSdk` 24 and `targetSdk` 36. The stock template still compiles against API 35; `ci/patch-android-templates.sh` raises `compileSdk` and the Android Gradle Plugin to 8.9.1 before export.
+Godot 4.6.2. iOS exports an Xcode project only (`application/export_project_only`) so signing happens in CI. Android uses the Gradle build with `minSdk` 24 and `targetSdk` 36. The stock template still compiles against API 35; `ci/patch-android-templates.sh` raises `compileSdk` and the Android Gradle Plugin to 8.9.1, then `ci/install-android-template.sh` installs that template into `android/build` (Godot will not export without it).
 
 GitHub Actions:
 
